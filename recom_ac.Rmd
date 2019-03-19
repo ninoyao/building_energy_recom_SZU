@@ -1,0 +1,105 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+##load data and data processing
+```{r}
+df <- read.csv(file = '/Users/nino/Desktop/范老师/buildingdata/BA10min.csv')
+df_new <- df[,c('Year','Month','Day','Hour','ID', 
+                paste0('Pwr_WCC_003F_0',1:6),
+                paste0('Pwr_CTC_003F_0',1:6),
+                paste0('Pwr_CTH_003F_0',7:9),
+                paste0('Pwr_CTH_003F_',10:11),
+                paste0('Temp_rtn_EVAP_WCC_003F_0',1:6),
+                paste0('Temp_sup_EVAP_WCC_003F_0',1:6),
+                paste0('Temp_rtn_COND_WCC_003F_0',1:6),
+                paste0('Temp_sup_COND_WCC_003F_0',1:6),
+                paste0('Flow_EVAP_WCC_003F_0',1:6),
+                paste0('Flow_COND_WCC_003F_0',1:6),
+                paste0('Pwr_SCHWP_003F_0',1:9),
+                paste0('Pwr_SCHWP_003F_',10:11))]
+```
+#冷机功耗计算
+公式：$coldingload = 4.2 * Flow * (rtn_temp - suptemp)$
+
+取值范围：
+CL :(0, 7000] Flow > 0 (rtn_temp - suptemp) > 0 
+
+基于以上条件进行初步的冷机功耗运算。
+```{r}
+#把检测器检测到的数值很小的flow转换成0
+fun.flowtest <- function(flow){
+  for (i in 1:26149) {
+    if(flow[i] < 2){
+      flow[i] = 0
+    } else {
+      flow[i] = flow[i]
+    }
+  }
+  return(flow)
+}
+
+df_new$Flow_EVAP_WCC_003F_01 <- fun.flowtest(df_new$Flow_EVAP_WCC_003F_01)
+df_new$CL_01 <- 4.2*df_new$Flow_EVAP_WCC_003F_01*(df_new$Temp_rtn_EVAP_WCC_003F_01 - df_new$Temp_sup_EVAP_WCC_003F_01)
+summary(df_new$CL_01)
+
+df_new$Flow_EVAP_WCC_003F_02  <- fun.flowtest(df_new$Flow_EVAP_WCC_003F_02)
+df_new$CL_02 <- 4.2*df_new$Flow_EVAP_WCC_003F_02*(df_new$Temp_rtn_EVAP_WCC_003F_02 - df_new$Temp_sup_EVAP_WCC_003F_02)
+summary(df_new$CL_02) 
+
+df_new$Flow_EVAP_WCC_003F_03 <- fun.flowtest(df_new$Flow_EVAP_WCC_003F_03)
+df_new$CL_03 <- 4.2*df_new$Flow_EVAP_WCC_003F_03*(df_new$Temp_rtn_EVAP_WCC_003F_03 - df_new$Temp_sup_EVAP_WCC_003F_03)
+summary(df_new$CL_03)
+
+df_new$Flow_EVAP_WCC_003F_04 <- fun.flowtest(df_new$Flow_EVAP_WCC_003F_04)
+df_new$CL_04 <- 4.2*df_new$Flow_EVAP_WCC_003F_04*(df_new$Temp_rtn_EVAP_WCC_003F_04 - df_new$Temp_sup_EVAP_WCC_003F_04) 
+summary(df_new$CL_04)
+
+df_new$Flow_EVAP_WCC_003F_05 <- fun.flowtest(df_new$Flow_EVAP_WCC_003F_05)
+df_new$CL_05 <- 4.2*df_new$Flow_EVAP_WCC_003F_05*(df_new$Temp_rtn_EVAP_WCC_003F_05 - df_new$Temp_sup_EVAP_WCC_003F_05)
+summary(df_new$CL_05)
+
+df_new$Flow_EVAP_WCC_003F_06 <- fun.flowtest(df_new$Flow_EVAP_WCC_003F_06)
+df_new$CL_06 <- 4.2*df_new$Flow_EVAP_WCC_003F_06*(df_new$Temp_rtn_EVAP_WCC_003F_06 - df_new$Temp_sup_EVAP_WCC_003F_06)
+summary(df_new$CL_06)
+```
+
+#计算EEEr
+EEEr（制冷系统能效比） = 空调系统制备的总冷量/制冷设备总电耗
+
+```{r}
+totalcl <- (df_new$CL_01 + df_new$CL_02 + df_new$CL_03 + df_new$CL_03 + df_new$CL_04 + df_new$CL_05 + df_new$CL_06) 
+totalpwr <- (df_new$Pwr_WCC_003F_01 + df_new$Pwr_WCC_003F_02 + df_new$Pwr_WCC_003F_03 + df_new$Pwr_WCC_003F_04 + df_new$Pwr_WCC_003F_05 + df_new$Pwr_WCC_003F_06 + df_new$Pwr_CTC_003F_01 + df_new$Pwr_CTC_003F_02 + df_new$Pwr_CTC_003F_03 + df_new$Pwr_CTC_003F_04 + df_new$Pwr_CTC_003F_05 + df_new$Pwr_CTC_003F_06 + df_new$Pwr_CTH_003F_07 + df_new$Pwr_CTH_003F_08 + df_new$Pwr_CTH_003F_09 + df_new$Pwr_CTH_003F_10 + df_new$Pwr_CTH_003F_11 + df_new$Pwr_SCHWP_003F_01 + df_new$Pwr_SCHWP_003F_02 + df_new$Pwr_SCHWP_003F_03 + df_new$Pwr_SCHWP_003F_04 + df_new$Pwr_SCHWP_003F_05 + df_new$Pwr_SCHWP_003F_06 + df_new$Pwr_SCHWP_003F_07 + df_new$Pwr_SCHWP_003F_08 + df_new$Pwr_SCHWP_003F_09) 
+EEEr <- totalcl / totalpwr
+
+plot(totalcl)
+plot(totalpwr)
+plot(EEEr)
+```
+
+#对每条数据做特征处理
+
+主要从
+
+1，冷流量 
+2，周几 
+3，小时 
+
+三方面来衡量，采用欧式距离。
+
+```{r}
+df_new$Flow_total <- df_new$Flow_COND_WCC_003F_01 + df_new$Flow_COND_WCC_003F_02 + df_new$Flow_COND_WCC_003F_03 + df_new$Flow_COND_WCC_003F_04 + df_new$Flow_COND_WCC_003F_05 + df_new$Pwr_WCC_003F_06 + df_new$Flow_EVAP_WCC_003F_01 + df_new$Flow_EVAP_WCC_003F_02 + df_new$Flow_EVAP_WCC_003F_03 + df_new$Flow_EVAP_WCC_003F_04 + df_new$Flow_EVAP_WCC_003F_05 + df_new$Flow_EVAP_WCC_003F_06
+df_new_k <- df_new[ ,c("Day", "Hour", "Flow_total")]
+#数据量太大，运算时间太久，先用1/10的数据量进行计算
+sub.df <- df_new_k[sample(nrow(df_new_k), 2400, replace = F),]
+library(philentropy)
+eudist <- distance(sub.df, method = "euclidean")
+#返回第i个数据的x个最小欧式距离
+fun.return.mineudist = function(i, x){
+  print(head(eudist[, i], x))
+}
+#eg 和第10个数据欧式距离最近的10个数据
+fun.return.mineudist(10,10)
+```
