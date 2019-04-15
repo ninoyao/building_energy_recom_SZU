@@ -1,0 +1,187 @@
+---
+title: "Buildingrecom"
+author: "Yuzhi Yao"
+date: "2019/4/10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##loading packages
+```{r}
+library(readr)
+library(ggplot2)
+```
+
+##load data and data processing
+
+```{r,cache=TRUE}
+df <- read_csv(file = '/Users/nino/Desktop/范老师/buildingdata/df_all_2018.csv')
+df_new <- df[, c("Time","Tdb","RH",
+  paste0("CH0",1:6,"_Twevout"),
+  paste0("CH0",1:6,"_Twevin"),
+  paste0("CH0",1:6,"_Mwev"),
+  paste0("CH0",1:6,"_Mwcd"),
+  paste0("CH0",1:6,"_pwr_factor"),
+  paste0("CH0",1:6,"_Twcdin"),
+  paste0("CH0",1:6,"_Twcdout"),
+  paste0("CH0",1:6,"_current"),
+  paste0("CH0",1:6,"_press_evap"),
+  paste0("CH0",1:6,"_press_cond"),
+  paste0("CH0",1:6,"_press_prg"))]
+
+```
+#冷机冷量计算 & 功率计算
+冷机冷量计算公式：$coldingload = 4.2 * Flow * (rtn_temp - suptemp)$
+功率：$P =  Current * 11kV * 1.732 * 0.94(powerfactor)$
+取值范围：
+$0  <  Coldingload < 7000 $
+$0  < Flow$
+$0 < (rtn_temp - suptemp) $
+$ 0 < P < 1300$
+
+基于以上条件进行初步的冷机功耗&功率运算。
+
+1，通过观察，发现冷流量数据中有missing value。因为数据量较大，先做异常值的剔除处理。
+
+2，通过观察，发现冷流量数据中有为负数和非常小的异常值，根据现实意义取0处理。
+
+3，计算冷冻水温差时发现部分有负值，根据现实情况取0处理。
+
+```{r include=FALSE}
+df_na <- na.omit(df_new)
+fun.flowtest <- function(flow){
+  for (i in 1:103024) {
+    if(flow[i] < 2){
+      flow[i] = 0
+    } else {
+      flow[i] = flow[i]
+    }
+  }
+  return(flow)
+}
+df_na$CH01_Mwev <- fun.flowtest(df_na$CH01_Mwev)
+df_na$CH02_Mwev <- fun.flowtest(df_na$CH02_Mwev)
+df_na$CH03_Mwev <- fun.flowtest(df_na$CH03_Mwev)
+df_na$CH04_Mwev <- fun.flowtest(df_na$CH04_Mwev)
+df_na$CH05_Mwev <- fun.flowtest(df_na$CH05_Mwev)
+df_na$CH06_Mwev <- fun.flowtest(df_na$CH06_Mwev)
+
+df_na$CH01_Mwcd <- fun.flowtest(df_na$CH01_Mwcd)
+df_na$CH02_Mwcd <- fun.flowtest(df_na$CH02_Mwcd)
+df_na$CH03_Mwcd <- fun.flowtest(df_na$CH03_Mwcd)
+df_na$CH04_Mwcd <- fun.flowtest(df_na$CH04_Mwcd)
+df_na$CH05_Mwcd <- fun.flowtest(df_na$CH05_Mwcd)
+df_na$CH06_Mwcd <- fun.flowtest(df_na$CH06_Mwcd)
+```
+
+#计算冷机冷量
+```{r}
+df_na$CL01 <- 4.2 * df_na$CH01_Mwev * fun.flowtest((df_na$CH01_Twevin - df_na$CH01_Twevout))
+df_na$CL02 <- 4.2 * df_na$CH02_Mwev * fun.flowtest((df_na$CH02_Twevin - df_na$CH02_Twevout))
+df_na$CL03 <- 4.2 * df_na$CH03_Mwev * fun.flowtest((df_na$CH03_Twevin - df_na$CH03_Twevout))
+df_na$CL04 <- 4.2 * df_na$CH04_Mwev * fun.flowtest((df_na$CH04_Twevin - df_na$CH04_Twevout))
+df_na$CL05 <- 4.2 * df_na$CH05_Mwev * fun.flowtest((df_na$CH05_Twevin - df_na$CH05_Twevout))
+df_na$CL06 <- 4.2 * df_na$CH06_Mwev * fun.flowtest((df_na$CH06_Twevin - df_na$CH06_Twevout))
+
+summary(df_na$CL01)
+summary(df_na$CL02)
+summary(df_na$CL03)
+summary(df_na$CL04)
+summary(df_na$CL05)
+summary(df_na$CL06)
+
+
+```
+
+#绘图
+```{r}
+ggplot(df_na[24000:24200,])+geom_point(aes(y = CL01, x= Time,group=1),color="chartreuse3")
+
+ggplot(df_na)+geom_point(aes(y = CH01_Mwev, x= Time,group=1),color="chartreuse3")
+```
+#功率计算
+
+pwr_factor 均为负数，取绝对值处理。
+
+```{r}
+df_na$P01 <- df_na$CH01_current * 11 * 1.732 * abs(df_na$CH01_pwr_factor)
+df_na$P02 <- df_na$CH02_current * 11 * 1.732 * abs(df_na$CH02_pwr_factor)
+df_na$P03 <- df_na$CH03_current * 11 * 1.732 * abs(df_na$CH03_pwr_factor)
+df_na$P04 <- df_na$CH04_current * 11 * 1.732 * abs(df_na$CH04_pwr_factor)
+df_na$P05 <- df_na$CH05_current * 11 * 1.732 * abs(df_na$CH05_pwr_factor)
+df_na$P06 <- df_na$CH06_current * 11 * 1.732 * abs(df_na$CH06_pwr_factor)
+
+summary(df_na$P01)
+summary(df_na$P02)
+summary(df_na$P03)
+summary(df_na$P04)
+summary(df_na$P05)
+summary(df_na$P06)
+```
+
+#计算COP
+COP = 空调系统制备的总冷量/制冷设备总电耗
+
+```{r}
+totalcl <- (df_na$CL01 + df_na$CL02 + df_na$CL03 + df_na$CL04 + df_na$CL05 + df_na$CL06)
+totalpwr <- (df_na$P01) + (df_na$P02) + (df_na$P03) + (df_na$P04) + (df_na$P05) + (df_na$P06)
+summary(totalcl)
+summary(totalpwr)
+COP <- totalcl / totalpwr
+COP[is.na(COP)] <- 0 #将COP中的NA值变为0。
+df_na$COP <- COP
+df_na$CLall <- totalcl
+ggplot(df_na)+geom_point(aes(y = COP, x= Time,group=1),color="chartreuse3")
+ggplot(df_na[24000:24200,])+geom_point(aes(y = COP, x= Time,group=1),color="chartreuse3")
+
+```
+
+#计算数据相似度
+用户侧相似度计算：
+1，冷量
+2，相对湿度RH
+3，室外干球温度
+
+#目前的问题
+1，因为有20%的数据的COP都是0，所以在计算相似工况时部分结果时无意义的，因为他们没有运行。
+
+2，数据量太大时计算量过大，这里为了节约时间只用了5%的数据。
+```{r}
+library(philentropy)
+df_user <- df_na[, c("CLall", "RH", "Tdb")]
+#归一化处理
+df_user_scale <- scale(df_user)
+#subset
+sub.df <- as.data.frame(df_user_scale[sample(nrow(df_user), 5000, replace = F),])
+#欧式距离计算
+eudist <- distance(sub.df, method = "euclidean")
+#返回第i个数据的x个最小欧式距离以及其COP
+options(scipen = 6000) #在6000一下关闭科学计数，方便观察。
+fun.return.mineudist = function(i, x){
+  df.sort <- as.data.frame(sort(eudist[, i]))
+  row <- gsub("[^0-9]", "", rownames(df.sort)) 
+  neu <- head(sort(eudist[, i]), x)
+  ncop <- t(head(df_na[c(row), c("COP","CL01", "CL02", "CL03", "CL04", "CL05", "CL06")],x))
+  result <- rbind(neu,ncop)
+  print(result)
+}
+#eg和第10个数据欧式距离最近的10个数据
+fun.return.mineudist(10,10)
+#和第十个数据最接近的是第4257个数据
+df_user[c(10, 4257),]
+df_user_scale[c(10,4257),]
+#输入新数据反馈
+fun.newdata = function(CLall, RH, Tdb){
+  newdata <- c(CLall, RH, Tdb)
+  sub.df <- rbind(newdata, sub.df)
+  eudist <- distance(sub.df, method = "euclidean")
+  fun.return.mineudist(1, 10)
+}
+#eg 新数据CL = 2700, RH = 76, Tdb = 21
+fun.newdata(2700, 76, 21)
+df_user[c(292,1994,794,57,1721),]
+```
+
