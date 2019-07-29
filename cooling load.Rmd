@@ -1,0 +1,467 @@
+---
+title: "cooling load prediction"
+output: html_notebook
+---
+##loading packages
+```{r}
+library(readr)
+library(ggplot2)
+library(lubridate)
+library(caret)
+library(randomForest)
+library(pso)
+library(GA)
+library(rgenoud)
+```
+
+##load data and data processing
+
+```{r,cache=TRUE,echo=FALSE}
+df <- read_csv(file = '/Users/nino/Desktop/范老师/buildingdata/df_all_2018.csv')
+df_new <- df[, c("Time","Tdb","RH",
+  paste0("CH0",1:6,"_Twevout"),
+  paste0("CH0",1:6,"_Twevin"),
+  paste0("CH0",1:6,"_Mwev"),
+  paste0("CH0",1:6,"_Mwcd"),
+  paste0("CH0",1:6,"_pwr_factor"),
+  paste0("CH0",1:6,"_Twcdin"),
+  paste0("CH0",1:6,"_Twcdout"),
+  paste0("CH0",1:6,"_current"),
+  paste0("CH0",1:6,"_press_evap"),
+  paste0("CH0",1:6,"_press_cond"),
+  paste0("CH0",1:6,"_press_prg"))]
+
+
+```
+#冷机冷量计算 & 功率计算
+冷机冷量计算公式：$coldingload = 4.2 * Flow * (rtn_temp - suptemp)$
+功率：$P =  Current * 11kV * 1.732 * 0.94(powerfactor)$
+取值范围：
+$0  <  Coldingload < 7000 $
+$0  < Flow$
+$0 < (rtn_temp - suptemp) $
+$ 0 < P < 1300$
+
+基于以上条件进行初步的冷机功耗&功率运算。
+
+1，通过观察，发现冷流量数据中有missing value。因为数据量较大，先做异常值的剔除处理。
+
+2，通过观察，发现冷流量数据中有为负数和非常小的异常值，根据现实意义取0处理。
+
+3，计算冷冻水温差时发现部分有负值，根据现实情况取0处理。
+
+```{r include=FALSE}
+df_na <- na.omit(df_new)
+fun.flowtest <- function(flow){
+  for (i in 1:103024) {
+    if(flow[i] < 2){
+      flow[i] = 0
+    } else {
+      flow[i] = flow[i]
+    }
+  }
+  return(flow)
+}
+df_na$CH01_Mwev <- fun.flowtest(df_na$CH01_Mwev)
+df_na$CH02_Mwev <- fun.flowtest(df_na$CH02_Mwev)
+df_na$CH03_Mwev <- fun.flowtest(df_na$CH03_Mwev)
+df_na$CH04_Mwev <- fun.flowtest(df_na$CH04_Mwev)
+df_na$CH05_Mwev <- fun.flowtest(df_na$CH05_Mwev)
+df_na$CH06_Mwev <- fun.flowtest(df_na$CH06_Mwev)
+
+df_na$CH01_Mwcd <- fun.flowtest(df_na$CH01_Mwcd)
+df_na$CH02_Mwcd <- fun.flowtest(df_na$CH02_Mwcd)
+df_na$CH03_Mwcd <- fun.flowtest(df_na$CH03_Mwcd)
+df_na$CH04_Mwcd <- fun.flowtest(df_na$CH04_Mwcd)
+df_na$CH05_Mwcd <- fun.flowtest(df_na$CH05_Mwcd)
+df_na$CH06_Mwcd <- fun.flowtest(df_na$CH06_Mwcd)
+```
+
+#计算冷机冷量
+```{r}
+
+fun.zerotest <- function(x){
+  for (i in 1:103024) {
+    if(x[i] < 0){
+      x[i] = 0
+    } else {
+      x[i] = x[i]
+    }
+  }
+  return(x)
+}
+
+df_na$CL01 <- 4.2 * df_na$CH01_Mwev * (df_na$CH01_Twevin - df_na$CH01_Twevout)
+df_na$CL02 <- 4.2 * df_na$CH02_Mwev * (df_na$CH02_Twevin - df_na$CH02_Twevout)
+df_na$CL03 <- 4.2 * df_na$CH03_Mwev * (df_na$CH03_Twevin - df_na$CH03_Twevout)
+df_na$CL04 <- 4.2 * df_na$CH04_Mwev * (df_na$CH04_Twevin - df_na$CH04_Twevout)
+df_na$CL05 <- 4.2 * df_na$CH05_Mwev * (df_na$CH05_Twevin - df_na$CH05_Twevout)
+df_na$CL06 <- 4.2 * df_na$CH06_Mwev * (df_na$CH06_Twevin - df_na$CH06_Twevout)
+
+df_na$CL01 <- fun.flowtest(df_na$CL01)
+df_na$CL02 <- fun.flowtest(df_na$CL02)
+df_na$CL03 <- fun.flowtest(df_na$CL03)
+df_na$CL04 <- fun.flowtest(df_na$CL04)
+df_na$CL05 <- fun.flowtest(df_na$CL05)
+df_na$CL06 <- fun.flowtest(df_na$CL06)
+
+summary(df_na$CL01)
+summary(df_na$CL02)
+summary(df_na$CL03)
+summary(df_na$CL04)
+summary(df_na$CL05)
+summary(df_na$CL06)
+
+df_na$P01 <- df_na$CH01_current * 11 * 1.732 * abs(df_na$CH01_pwr_factor)
+df_na$P02 <- df_na$CH02_current * 11 * 1.732 * abs(df_na$CH02_pwr_factor)
+df_na$P03 <- df_na$CH03_current * 11 * 1.732 * abs(df_na$CH03_pwr_factor)
+df_na$P04 <- df_na$CH04_current * 11 * 1.732 * abs(df_na$CH04_pwr_factor)
+df_na$P05 <- df_na$CH05_current * 11 * 1.732 * abs(df_na$CH05_pwr_factor)
+df_na$CH06_current <- fun.zerotest(df_na$CH06_current)
+df_na$P06 <- df_na$CH06_current * 11 * 1.732 * abs(df_na$CH06_pwr_factor)
+
+df_na$COP1 <- df_na$CL01 / df_na$P01
+df_na$COP2 <- df_na$CL02 / df_na$P02
+df_na$COP3 <- df_na$CL03 / df_na$P03
+df_na$COP4 <- df_na$CL04 / df_na$P04
+df_na$COP5 <- df_na$CL05 / df_na$P05
+df_na$COP6 <- df_na$CL06 / df_na$P06
+
+df_na$COP1[is.na(df_na$COP1)] <- 0
+df_na$COP2[is.na(df_na$COP2)] <- 0
+df_na$COP3[is.na(df_na$COP3)] <- 0
+df_na$COP4[is.na(df_na$COP4)] <- 0
+df_na$COP5[is.na(df_na$COP5)] <- 0
+df_na$COP6[is.na(df_na$COP6)] <- 0
+
+df_na$COP1[is.infinite(df_na$COP1)] <- 0
+df_na$COP2[is.infinite(df_na$COP2)] <- 0
+df_na$COP3[is.infinite(df_na$COP3)] <- 0
+df_na$COP4[is.infinite(df_na$COP4)] <- 0
+df_na$COP5[is.infinite(df_na$COP5)] <- 0
+df_na$COP6[is.infinite(df_na$COP6)] <- 0
+
+```
+
+#绘图
+```{r}
+ggplot(df_na[24000:24200,])+geom_point(aes(y = CL01, x= Time,group=1),color="chartreuse3")
+
+ggplot(df_na)+geom_point(aes(y = CH01_Mwev, x= Time,group=1),color="chartreuse3")
+```
+
+
+##对cooling load 进行建模预测
+
+#数据处理
+
+
+```{r}
+df_cl <- df_na[, c("Time","Tdb","RH","CL01","CL02","CL03","CL04","CL05","CL06","COP1","COP2","COP3","COP4","COP5","COP6")]
+df_cl$month <- months(df_cl$Time)
+df_cl$day <- day(df_cl$Time)
+df_cl$hour <- hour(df_cl$Time)
+df_cl$fac_month <- as.factor(df_cl$month)
+df_cl$fac_day <- as.factor(df_cl$day)
+df_cl$fac_hour <- as.factor(df_cl$hour)
+df_cl$totalcl <- (df_cl$CL01 + df_cl$CL02 + df_cl$CL03 + df_cl$CL04 + df_cl$CL05 + df_cl$CL06)
+
+clhrago <- df_cl$totalcl
+clhrago[1:30] <- 0
+clhrago[30:103024] <- df_cl$totalcl[1:102995]
+df_cl$clhrago <- clhrago
+```
+
+```{r}
+set.seed(9)
+in_train <- createDataPartition(y = df_cl$totalcl,
+                                p = 3 / 4,
+                                list = FALSE)
+df_tr <- df_cl[in_train, ]
+df_test <- df_cl[-in_train, ]
+lm.base <- lm(totalcl ~ fac_hour + fac_day + fac_month + Tdb + RH, data = df_tr)
+summary(lm.base)
+predict_base <- predict(lm.base, newdata = df_test)
+rmse_base <- sqrt(sum((predict_base - df_test$totalcl)^2)/dim(df_test)[1])
+mse_base <- sum((predict_base - df_test$totalcl)**2)/dim(df_test)[1]
+
+lm.hrago <- lm(totalcl ~ fac_hour + fac_day + fac_month + Tdb + RH + clhrago, data = df_tr)
+summary(lm.hrago)
+predict_hrago <- predict(lm.hrago, newdata = df_test)
+rmse_hrago <- sqrt(sum((predict_hrago - df_test$totalcl)^2)/dim(df_test)[1])
+mse_hrago <- sum((predict_hrago - df_test$totalcl)**2)/dim(df_test)[1]
+
+trainFea <- df_tr[, c("fac_month", "fac_day", "fac_hour", "Tdb", "RH", "clhrago")]
+testFea <- df_test[, c("fac_month", "fac_day", "fac_hour", "Tdb", "RH", "clhrago")]
+rf_ago <- randomForest(trainFea, df_tr$totalcl, ntree=100, importance=TRUE)
+predict_rf <- predict(rf_ago, newdata = testFea)
+predict_rf_cl <- predict(rf_ago, newdata = df_cl)
+rmse_rf <- sqrt(sum((predict_rf - df_test$totalcl)^2)/dim(df_test)[1])
+df_test$rf <- predict_rf
+df_cl$rf <- predict_rf_cl
+
+```
+
+```{r}
+ggplot(df_test[100:3000,]) + geom_point(aes(y = totalcl, x= Time, group=1),color="chartreuse3") + geom_point(aes(y = rf, x= Time, group=1),color="chartreuse4")
+```
+
+#COP预测
+
+```{r}
+df_cl$PLR1 <- (df_cl$CL01/8091)
+df_cl$PLR2 <- (df_cl$CL02/8289)
+df_cl$PLR3 <- (df_cl$CL03/8855)
+df_cl$PLR4 <- (df_cl$CL04/8127)
+df_cl$PLR5 <- (df_cl$CL05/7944)
+df_cl$PLR6 <- (df_cl$CL06/9718)
+
+#将温度，湿度做归一化处理
+df_cl$stdTdb <- as.numeric(scale(df_cl$Tdb))
+df_cl$stdRH <- as.numeric(scale(df_cl$RH))
+
+df_tr <- df_cl[in_train, ]
+df_test <- df_cl[-in_train, ]
+
+```
+
+把COP为0的drop掉再预测
+```{r}
+df_tr_cop1 <- subset(df_tr, COP1 != 0)
+df_tr_cop2 <- subset(df_tr, COP2 != 0)
+df_tr_cop3 <- subset(df_tr, COP3 != 0)
+df_tr_cop4 <- subset(df_tr, COP4 != 0)
+df_tr_cop5 <- subset(df_tr, COP5 != 0)
+df_tr_cop6 <- subset(df_tr, COP6 != 0)
+
+
+lm.cop1.drop <- lm(COP1 ~ PLR1 + stdTdb + stdRH, data = df_tr_cop1)
+predict_cop1_drop <- predict(lm.cop1.drop, newdata = df_test)
+precop1_drop <- predict(lm.cop1.drop, newdata = df_cl)
+rmse_cop1_drop <- sqrt(sum((predict_cop1_drop - df_test$COP1)^2)/dim(df_test)[1])
+
+lm.cop2.drop <- lm(COP2 ~ PLR2 + stdTdb + stdRH, data = df_tr_cop2)
+predict_cop2_drop <- predict(lm.cop2.drop, newdata = df_test)
+precop2_drop <- predict(lm.cop2.drop, newdata = df_cl)
+rmse_cop2_drop <- sqrt(sum((predict_cop2_drop - df_test$COP2)^2)/dim(df_test)[1])
+
+lm.cop3.drop <- lm(COP3 ~ PLR3 + stdTdb + stdRH, data = df_tr_cop3)
+predict_cop3_drop <- predict(lm.cop3.drop, newdata = df_test)
+precop3_drop <- predict(lm.cop3.drop, newdata = df_cl)
+rmse_cop3_drop <- sqrt(sum((predict_cop3_drop - df_test$COP3)^2)/dim(df_test)[1])
+
+lm.cop4.drop <- lm(COP4 ~ PLR4 + stdTdb + stdRH, data = df_tr_cop4)
+predict_cop4_drop <- predict(lm.cop4.drop, newdata = df_test)
+precop4_drop <- predict(lm.cop4.drop, newdata = df_cl)
+rmse_cop4_drop <- sqrt(sum((predict_cop4_drop - df_test$COP4)^2)/dim(df_test)[1])
+
+lm.cop5.drop <- lm(COP5 ~ PLR5 + stdTdb + stdRH, data = df_tr_cop5)
+predict_cop5_drop <- predict(lm.cop5.drop, newdata = df_test)
+precop5_drop <- predict(lm.cop5.drop, newdata = df_cl)
+rmse_cop5_drop <- sqrt(sum((predict_cop5_drop - df_test$COP5)^2)/dim(df_test)[1])
+
+lm.cop6.drop <- lm(COP6 ~ PLR6 + stdTdb + stdRH, data = df_tr_cop6)
+predict_cop6_drop <- predict(lm.cop6.drop, newdata = df_test)
+precop6_drop <- predict(lm.cop6.drop, newdata = df_cl)
+rmse_cop6_drop <- sqrt(sum((predict_cop6_drop - df_test$COP6)^2)/dim(df_test)[1])
+```
+
+```{r}
+lm.cop1 <- lm(COP1 ~ PLR1 + Tdb + RH, data = df_tr)
+predict_cop1 <- predict(lm.cop1, newdata = df_test)
+precop1 <- predict(lm.cop1, newdata = df_cl)
+rmse_cop1 <- sqrt(sum((predict_cop1 - df_test$COP1)^2)/dim(df_test)[1])
+
+lm.cop2 <- lm(COP2 ~ PLR2 + Tdb + RH, data = df_tr)
+predict_cop2 <- predict(lm.cop2, newdata = df_test)
+precop2 <- predict(lm.cop2, newdata = df_cl)
+rmse_cop2 <- sqrt(sum((predict_cop2 - df_test$COP2)^2)/dim(df_test)[1])
+
+lm.cop3 <- lm(COP3 ~ PLR3 + Tdb + RH, data = df_tr)
+predict_cop3 <- predict(lm.cop3, newdata = df_test)
+precop3 <- predict(lm.cop3, newdata = df_cl)
+rmse_cop3 <- sqrt(sum((predict_cop3 - df_test$COP3)^2)/dim(df_test)[1])
+
+lm.cop4 <- lm(COP4 ~ PLR4 + Tdb + RH, data = df_tr)
+predict_cop4 <- predict(lm.cop4, newdata = df_test)
+precop4 <- predict(lm.cop4, newdata = df_cl)
+rmse_cop4 <- sqrt(sum((predict_cop4 - df_test$COP4)^2)/dim(df_test)[1])
+
+lm.cop5 <- lm(COP5~ PLR5 + Tdb + RH, data = df_tr)
+predict_cop5 <- predict(lm.cop5, newdata = df_test)
+precop5 <- predict(lm.cop5, newdata = df_cl)
+rmse_cop5 <- sqrt(sum((predict_cop5 - df_test$COP5)^2)/dim(df_test)[1])
+
+lm.cop6 <- lm(COP6 ~ PLR6 + Tdb + RH, data = df_tr)
+predict_cop6 <- predict(lm.cop6, newdata = df_test)
+precop6 <- predict(lm.cop6, newdata = df_cl)
+rmse_cop6 <- sqrt(sum((predict_cop6 - df_test$COP6)^2)/dim(df_test)[1])
+
+df_cl$precop1 <- precop1
+df_cl$precop2 <- precop2
+df_cl$precop3 <- precop3
+df_cl$precop4 <- precop4
+df_cl$precop5 <- precop5
+df_cl$precop6 <- precop6
+df_cl$precop1_drop <- precop1_drop
+df_cl$precop2_drop <- precop2_drop
+df_cl$precop3_drop <- precop3_drop
+df_cl$precop4_drop <- precop4_drop
+df_cl$precop5_drop <- precop5_drop
+df_cl$precop6_drop <- precop6_drop
+
+```
+
+
+对比是否drop0数据的模型。
+```{r}
+df_cl_drop <- subset(df_cl, COP1 != 0)
+ggplot(df_cl_drop[1:1000,]) + geom_point(aes(y = COP1, x= Time),color="chartreuse3") + geom_point(aes(y = precop1, x= Time),color="chartreuse4") + geom_point(aes(y = precop1_drop, x= Time),color="red3")
+```
+
+```{r}
+#write.csv(df_cl, file  = "df_cl.csv")
+```
+
+##排序模型
+
+#PSO based sequencing model
+
+运行一次的耗时约为140s
+```{r}
+Qload1 <- c(8091, 8289, 8855, 8127, 7944, 9718)
+sequencing <- function(Qload){
+  psoresult <- c(0,0,0,0,0,0,0)
+  for (i in 1) { 
+    obj.function <- function(plr1, plr2,plr3,plr4,plr5,plr6) {
+    if(sum(Qload * c(plr1, plr2,plr3,plr4,plr5,plr6)) >= predict_rf_cl[i]) {pen_1 <- 0} else {pen_1 <- 100000} #predict_rf_cl 为预测的coldingload
+    
+      
+cop1 <- predict(lm.cop1.drop, newdata = data.frame(PLR1 = plr1, stdTdb = df_cl[i, "stdTdb"], stdRH = df_cl[i,"stdRH"]))
+cop2 <- predict(lm.cop2.drop, newdata = data.frame(PLR2 = plr2, stdTdb = df_cl[i, "stdTdb"], stdRH = df_cl[i,"stdRH"]))
+cop3 <- predict(lm.cop3.drop, newdata = data.frame(PLR3 = plr3, stdTdb = df_cl[i, "stdTdb"], stdRH = df_cl[i,"stdRH"]))
+cop4 <- predict(lm.cop4.drop, newdata = data.frame(PLR4 = plr4, stdTdb = df_cl[i, "stdTdb"], stdRH = df_cl[i,"stdRH"]))
+cop5 <- predict(lm.cop5.drop, newdata = data.frame(PLR5 = plr5, stdTdb = df_cl[i, "stdTdb"], stdRH = df_cl[i,"stdRH"]))
+cop6 <- predict(lm.cop6.drop, newdata = data.frame(PLR6 = plr6, stdTdb = df_cl[i, "stdTdb"], stdRH = df_cl[i,"stdRH"]))
+ 
+if (cop6 >= 0) {
+   cop1 = cop1
+ } else {cop6 = 0}
+
+    pwr_1 <- Qload[1] * plr1 / cop1
+    pwr_2 <- Qload[2] * plr2 / cop2
+    pwr_3 <- Qload[3] * plr3 / cop3
+    pwr_4 <- Qload[4] * plr4 / cop4
+    pwr_5 <- Qload[5] * plr5 / cop5
+    pwr_6 <- Qload[6] * plr6 / cop6
+    
+    result <- pwr_1 + pwr_2 + pwr_3 +pwr_4 +pwr_5 +pwr_6 + pen_1
+    return(as.numeric(result))
+    }
+  pso <- psoptim(rep(0.1,6), function(x) obj.function(x[1],x[2],x[3],x[4],x[5],x[6]), lower = 0, upper = 1)
+  psoresult <- rbind(psoresult,c(pso$par,pso$value))
+  }
+  return(psoresult)
+}
+
+pso_result <- sequencing(Qload = Qload1)
+```
+
+#Genetice Optimization using derivatives
+
+运行一次耗时约为33s
+```{r}
+#A genetic algorithm plus derivative optimizer.
+
+boundary_matrix <- matrix(c(rep(0,6),rep(10,6)),nrow = 6)
+fun.check.status <- function(plr){
+  for (i in 1:6) {
+    if(plr[i] == 0) 
+    {plr[i] = 0} else {plr[i] = 1}
+  }
+  return(plr)
+}
+
+sequencing_ge <- function(Qload){
+  geresult <- c(0,0,0,0,0,0,0) 
+  open_status <- c(0,0,0,0,0,0)
+  ge_plr <- c(0,0,0,0,0,0)
+  for (i in 1:3) { 
+    obj.function <- function(plr1, plr2,plr3,plr4,plr5,plr6) {
+      if(sum(Qload * c((plr1/10), (plr2/10),(plr3/10) ,(plr4/10),(plr5/10) ,(plr6/10))) >= predict_rf_cl[i]) {pen_1 <- 0} else {pen_1 <- 100000} #predict_rf_cl 为预测的coldingload
+      #约束：开启的冷机2h内不能关闭,因为数据为每5分钟一次，所以从第25个数据开始考虑第i-24个数据。
+      if(i < 25) {
+        if(i == 1) {pen_2 <- 0} else {
+          if(sum((open_status[i] - open_status[1]) >= 1)) {pen_2 <- 100000} else {pen_2 <- 0}
+        }
+      } else 
+      { if(sum((open_status[i] - open_status[i-24]) >= 1)) {pen_2 <- 100000} else {pen_2 <- 0}}
+      
+      cop1 <- predict(lm.cop1.drop, newdata = data.frame(PLR1 = (plr1/10), stdTdb = df_cl[i, "stdTdb"], stdRH = df_cl[i,"stdRH"]))
+      cop2 <- predict(lm.cop2.drop, newdata = data.frame(PLR2 = (plr2/10), stdTdb = df_cl[i, "stdTdb"], stdRH = df_cl[i,"stdRH"]))
+      cop3 <- predict(lm.cop3.drop, newdata = data.frame(PLR3 = (plr3/10), stdTdb = df_cl[i, "stdTdb"], stdRH = df_cl[i,"stdRH"]))
+      cop4 <- predict(lm.cop4.drop, newdata = data.frame(PLR4 = (plr4/10), stdTdb = df_cl[i, "stdTdb"], stdRH = df_cl[i,"stdRH"]))
+      cop5 <- predict(lm.cop5.drop, newdata = data.frame(PLR5 = (plr5/10), stdTdb = df_cl[i, "stdTdb"], stdRH = df_cl[i,"stdRH"]))
+      cop6 <- predict(lm.cop6.drop, newdata = data.frame(PLR6 = (plr6/10), stdTdb = df_cl[i, "stdTdb"], stdRH = df_cl[i,"stdRH"]))
+      
+      if (cop6 >= 0) {
+        cop6 = cop6
+      } else {cop6 = 0}
+      
+      pwr_1 <- Qload[1] * (plr1/10) / cop1
+      pwr_2 <- Qload[2] * (plr2/10) / cop2
+      pwr_3 <- Qload[3] * (plr3/10) / cop3
+      pwr_4 <- Qload[4] * (plr4/10) / cop4
+      pwr_5 <- Qload[5] * (plr5/10) / cop5
+      pwr_6 <- Qload[6] * (plr6/10) / cop6
+      
+      result <- pwr_1 + pwr_2 + pwr_3 +pwr_4 +pwr_5 +pwr_6 + pen_1 + pen_2
+      return(as.numeric(result))
+    }
+    ge <- genoud(function(x) obj.function(x[1],x[2],x[3],x[4],x[5],x[6]),data.type.int = TRUE, nvars = 6, max = FALSE, Domains = boundary_matrix)
+    geresult <- rbind(geresult,c(ge$par,ge$value))
+    ge_plr <- rbind(ge_plr, ge$par)
+    open_status <- rbind(open_status, fun.check.status(ge_plr[i+1,]))
+  }
+  return(data.frame(geresult,ge_plr,open_status))
+}
+
+ge_result_deadband_1000 <- sequencing_ge(Qload1)
+```
+
+
+#能耗对比
+
+对比真实COP和预测COP下的能耗。
+
+```{r}
+real_cost <- sum(df_na[1:1000,c("P03","P05")])
+
+time_real_cost <- (df_na$P03 + df_na$P05)[1:1001]
+
+realvsge <- data.frame(time_real_cost, ge_result_1000[,7], df_na$Time[1:1001])
+
+ggplot(realvsge) + geom_point(aes(y = time_real_cost, x= df_na$Time[1:1001], group=1),color="chartreuse3") + geom_point(aes(y = ge_result_1000[,7], x= df_na$Time[1:1001], group=1),color="red")
+
+energysave <- real_cost - sum(ge_result_1000[,7])
+
+seq_cost <- sum(ge_result_1000[,7])
+
+percentsave <- (real_cost - sum(ge_result_1000[,7])) / real_cost
+
+seq_result <- data.frame(real_cost, seq_cost, energysave, percentsave)
+
+```
+
+
+copseq <- read_csv("/Users/nino/Desktop/范老师/TSUpapr/copresult.csv")
+
+copseq <- subset(copseq,select=-X1)
+
+cop <- subset(df_cl, select = c(COP1, COP2, COP3, COP4, COP5,COP6))
+
+Qload1 <- c(8091, 8289, 8855, 8127, 7944, 9718)
+
+energyori <- sum(Qload * (copseq[1:1000,] / cop[1:1000,]), na.rm = TRUE)
+
+
