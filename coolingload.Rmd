@@ -12,6 +12,8 @@ library(randomForest)
 library(pso)
 library(GA)
 library(rgenoud)
+library(doParallel)
+library(foreach)
 ```
 
 ##load data and data processing
@@ -382,20 +384,100 @@ fun.check.status <- function(plr){
   return(plr)
 }
 
-sequencing_ge <- function(Qload){
+fun.check.status.ori <- function(plr){
+  for (i in 1:24) {
+    if(plr[i] == 0) 
+    {plr[i] = 0} else {plr[i] = 1}
+  }
+  return(plr)
+}
+
+plr_status <- df_cl[1:24,c("PLR1","PLR2","PLR3","PLR4","PLR5","PLR6")]
+open_status <- sapply(plr_status, fun.check.status.ori)
+cost_24 <- c(873)
+for (i in 2:24) {
+  
+  cost_24 <- rbind(cost_24,sum(df_na[i,c("P03","P05","P06")]))
+  
+}
+
+df_cl_24 <- df_cl[1:24,c("PLR1","PLR2","PLR3","PLR4","PLR5","PLR6")]
+df_cl_24$cost <- cost_24
+
+sequencing_ge <- function(Qload, x){
+  geresult <- df_cl_24[1:24,c("PLR1","PLR2","PLR3","PLR4","PLR5","PLR6","cost")]
+  plr_status <- df_cl[1:24,c("PLR1","PLR2","PLR3","PLR4","PLR5","PLR6")]
+  open_status <- sapply(plr_status, fun.check.status.ori)
+  for (i in 25:x) { 
+    obj.function <- function(plr1, plr2,plr3,plr4,plr5,plr6) {
+      #predict_rf_cl 为预测的coldingload
+      if(sum(Qload * c((plr1/10), (plr2/10),(plr3/10) ,(plr4/10),(plr5/10) ,(plr6/10))) >= predict_rf_cl[i]) {pen_1 <- 0} 
+      else {pen_1 <- 100000} 
+      #PLR状态
+      PLRStatus <- fun.check.status(c(plr1, plr2,plr3,plr4,plr5,plr6))
+      #约束：开启的冷机2h内不能关闭,因为数据为每5分钟一次，所以从第25个数据开始考虑第i-24个数据。
+      
+      for (k in 1:6) {
+        if((c(plr1, plr2,plr3,plr4,plr5,plr6)[k] == 0) & (open_status[i-24,k] == 0) & (sum(open_status[(i-23) : (i-1),k]) > 0)) {pen_2 <- 10000} 
+        else
+        {pen_2 <- 0}
+      }
+      
+      cop1 <- predict(lm.cop1.drop, newdata = data.frame(PLR1 = (plr1/10), stdTdb = df_cl[i, "stdTdb"], stdRH = df_cl[i,"stdRH"]))
+      cop2 <- predict(lm.cop2.drop, newdata = data.frame(PLR2 = (plr2/10), stdTdb = df_cl[i, "stdTdb"], stdRH = df_cl[i,"stdRH"]))
+      cop3 <- predict(lm.cop3.drop, newdata = data.frame(PLR3 = (plr3/10), stdTdb = df_cl[i, "stdTdb"], stdRH = df_cl[i,"stdRH"]))
+      cop4 <- predict(lm.cop4.drop, newdata = data.frame(PLR4 = (plr4/10), stdTdb = df_cl[i, "stdTdb"], stdRH = df_cl[i,"stdRH"]))
+      cop5 <- predict(lm.cop5.drop, newdata = data.frame(PLR5 = (plr5/10), stdTdb = df_cl[i, "stdTdb"], stdRH = df_cl[i,"stdRH"]))
+      cop6 <- predict(lm.cop6.drop, newdata = data.frame(PLR6 = (plr6/10), stdTdb = df_cl[i, "stdTdb"], stdRH = df_cl[i,"stdRH"]))
+      
+      if (cop6 >= 0) {
+        cop6 = cop6
+      } else {cop6 = 0}
+      
+      pwr_1 <- Qload[1] * (plr1/10) / cop1
+      pwr_2 <- Qload[2] * (plr2/10) / cop2
+      pwr_3 <- Qload[3] * (plr3/10) / cop3
+      pwr_4 <- Qload[4] * (plr4/10) / cop4
+      pwr_5 <- Qload[5] * (plr5/10) / cop5
+      pwr_6 <- Qload[6] * (plr6/10) / cop6
+      
+      result <- pwr_1 + pwr_2 + pwr_3 +pwr_4 +pwr_5 +pwr_6 + pen_1 + pen_2
+      return(as.numeric(result))
+    }
+    ge <- genoud(function(x) obj.function(x[1],x[2],x[3],x[4],x[5],x[6]),data.type.int = TRUE, nvars = 6, max = FALSE, Domains = boundary_matrix)
+    geresult <- rbind(geresult,c(ge$par,ge$value))
+    plr_status <- rbind(plr_status, ge$par)
+    open_status <- rbind(open_status, fun.check.status(plr_status[i,]))
+  }
+  return(data.frame(geresult,plr_status,open_status))
+}
+
+ge_result_deadband_1_50 <- sequencing_ge(Qload1,x = 1:50)
+ge_result_deadband_1_1000 <- sequencing_ge(Qload1, x = 1:1000)
+```
+
+#尝试多线程
+```{r}
+sequencing_ge_multi <- function(Qload,i){
   geresult <- c(0,0,0,0,0,0,0) 
   open_status <- c(0,0,0,0,0,0)
   ge_plr <- c(0,0,0,0,0,0)
-  for (i in 1:3) { 
+  for (i in ) {
+    
+
     obj.function <- function(plr1, plr2,plr3,plr4,plr5,plr6) {
-      if(sum(Qload * c((plr1/10), (plr2/10),(plr3/10) ,(plr4/10),(plr5/10) ,(plr6/10))) >= predict_rf_cl[i]) {pen_1 <- 0} else {pen_1 <- 100000} #predict_rf_cl 为预测的coldingload
+      #predict_rf_cl 为预测的coldingload
+      if(sum(Qload * c((plr1/10), (plr2/10),(plr3/10) ,(plr4/10),(plr5/10) ,(plr6/10))) >= predict_rf_cl[i]) {pen_1 <- 0} 
+      else {pen_1 <- 100000} 
+      #PLR状态
+      PLRStatus <- fun.check.status(c(plr1, plr2,plr3,plr4,plr5,plr6))
       #约束：开启的冷机2h内不能关闭,因为数据为每5分钟一次，所以从第25个数据开始考虑第i-24个数据。
       if(i < 25) {
         if(i == 1) {pen_2 <- 0} else {
-          if(sum((open_status[i] - open_status[1]) >= 1)) {pen_2 <- 100000} else {pen_2 <- 0}
+          if(length(which(fun.check.status(c(plr1, plr2,plr3,plr4,plr5,plr6)) - open_status[i,] < 0)) >= 1) {pen_2 <- 100000} else {pen_2 <- 0}
         }
       } else 
-      { if(sum((open_status[i] - open_status[i-24]) >= 1)) {pen_2 <- 100000} else {pen_2 <- 0}}
+      { if(length(which(fun.check.status(c(plr1, plr2,plr3,plr4,plr5,plr6)) - open_status[i-24,]<0)) >= 1) {pen_2 <- 100000} else {pen_2 <- 0}}
       
       cop1 <- predict(lm.cop1.drop, newdata = data.frame(PLR1 = (plr1/10), stdTdb = df_cl[i, "stdTdb"], stdRH = df_cl[i,"stdRH"]))
       cop2 <- predict(lm.cop2.drop, newdata = data.frame(PLR2 = (plr2/10), stdTdb = df_cl[i, "stdTdb"], stdRH = df_cl[i,"stdRH"]))
@@ -426,10 +508,12 @@ sequencing_ge <- function(Qload){
   return(data.frame(geresult,ge_plr,open_status))
 }
 
-ge_result_deadband_1000 <- sequencing_ge(Qload1)
+cl <- makeCluster(2)
+registerDoParallel(cl)
+stopCluster(cl)
+
+muti <- foreach(x = 1:2,.combine = "rbind",.packages = "rgenoud") %dopar% sequencing_ge_multi(Qload = Qload1, x)
 ```
-
-
 #能耗对比
 
 对比真实COP和预测COP下的能耗。
@@ -439,15 +523,17 @@ real_cost <- sum(df_na[1:1000,c("P03","P05")])
 
 time_real_cost <- (df_na$P03 + df_na$P05)[1:1001]
 
-realvsge <- data.frame(time_real_cost, ge_result_1000[,7], df_na$Time[1:1001])
+realvsge <- data.frame(time_real_cost, ge_result_deadband_1_1000[,7], df_na$Time[1:1001])
 
+ggplot(realvsge) + geom_point(aes(y = time_real_cost, x= df_na$Time[1:1001], group=1),color="chartreuse3") + geom_point(aes(y = ge_result_deadband_1_1000[,7], x= df_na$Time[1:1001], group=1),color="red")
+#原方案
 ggplot(realvsge) + geom_point(aes(y = time_real_cost, x= df_na$Time[1:1001], group=1),color="chartreuse3") + geom_point(aes(y = ge_result_1000[,7], x= df_na$Time[1:1001], group=1),color="red")
 
-energysave <- real_cost - sum(ge_result_1000[,7])
+energysave <- real_cost - sum(ge_result_deadband_1_1000[,7])
 
-seq_cost <- sum(ge_result_1000[,7])
+seq_cost <- sum(ge_result_deadband_1_1000[,7])
 
-percentsave <- (real_cost - sum(ge_result_1000[,7])) / real_cost
+percentsave <- (real_cost - sum(ge_result_deadband_1_1000[,7])) / real_cost
 
 seq_result <- data.frame(real_cost, seq_cost, energysave, percentsave)
 
